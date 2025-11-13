@@ -61,6 +61,7 @@ class ReservaListResponse(BaseModel):
     fecha_hora_fin: datetime
     estado_pago: str
     monto_pago: float
+    usuario_nombre: Optional[str] = None
 
 class ErrorResponse(BaseModel):
     """Model para respuestas de error"""

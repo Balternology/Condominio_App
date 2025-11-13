@@ -1,102 +1,115 @@
-from fastapi import APIRouter, Depends
-from typing import Any
+from decimal import Decimal
+import logging
+from typing import Any, List
+
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from ....db.deps import get_db
-from ....models.models import (
-    ResidenteVivienda,
-    Vivienda,
+
+from app.core.auth import get_current_active_user
+from app.db.deps import get_db
+from app.models.models import (
     GastoComun,
     Multa,
+    Pago,
     Reserva,
+    ResidenteVivienda,
+    Usuario,
+    Vivienda,
 )
-import logging
-import json
-from decimal import Decimal
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Helper para convertir Decimal a float
-def decimal_to_float(obj):
-    if isinstance(obj, Decimal):
-        return float(obj)
-    raise TypeError
+
+def _to_float(value: Any) -> float:
+    if value is None:
+        return 0.0
+    if isinstance(value, Decimal):
+        return float(value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
 
 @router.get("/residente/{usuario_id}")
-async def desglose_residente(usuario_id: int, db: Session = Depends(get_db)):
-    logger.info(f"DEBUG Pagos: Iniciando desglose_residente para usuario_id={usuario_id}")
+async def desglose_residente(
+    usuario_id: int,
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(get_current_active_user),
+):
+    logger.info("DEBUG Pagos: Iniciando desglose_residente para usuario_id=%s", usuario_id)
+
+    if current_user.id != usuario_id and current_user.rol not in {"Administrador", "Conserje", "Super Admin"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tienes permisos para consultar esta información",
+        )
+
     try:
-        # Viviendas del residente
-        rv_list: list[Any] = db.query(ResidenteVivienda).filter(ResidenteVivienda.usuario_id == usuario_id).all()
-        viv_ids = [int(getattr(rv, "vivienda_id")) for rv in rv_list]
+        rv_list: List[ResidenteVivienda] = (
+            db.query(ResidenteVivienda)
+            .filter(ResidenteVivienda.usuario_id == usuario_id)
+            .all()
+        )
+        viv_ids = [int(rv.vivienda_id) for rv in rv_list]
+
         if not viv_ids:
-            logger.warning(f"DEBUG Pagos: No se encontraron viviendas para usuario_id={usuario_id}")
-            return {"viviendas": [], "cargo_fijo_uf": 0.0, "gastos_comunes": [], "multas": [], "reservas": []}
+            logger.warning("DEBUG Pagos: No se encontraron viviendas para usuario_id=%s", usuario_id)
+            return {
+                "viviendas": [],
+                "cargo_fijo_uf": 0.0,
+                "gastos_comunes": [],
+                "multas": [],
+                "reservas": [],
+            }
 
-        # Tomamos la primera vivienda para cargo fijo (MVP)
-        vivienda: Any = db.query(Vivienda).filter(Vivienda.id.in_(viv_ids)).order_by(Vivienda.id.asc()).first()
-        cargo_val: Any = getattr(vivienda, "cargo_fijo_uf", 0.0) if vivienda is not None else 0.0
-        cargo_fijo_uf = float(cargo_val) if cargo_val is not None else 0.0
+        vivienda = (
+            db.query(Vivienda)
+            .filter(Vivienda.id.in_(viv_ids))
+            .order_by(Vivienda.id.asc())
+            .first()
+        )
+        cargo_fijo_uf = _to_float(vivienda.cargo_fijo_uf if vivienda else 0)
 
-        # Gastos comunes
-        gastos: list[Any] = db.query(GastoComun).filter(GastoComun.vivienda_id.in_(viv_ids)).all()
-        gastos_payload = []
-        for g in gastos:
-            venci = getattr(g, "vencimiento", None)
-            monto_val = getattr(g, "monto_total", 0)
-            monto_total = float(monto_val) if monto_val is not None else 0.0
-            gastos_payload.append(
-                {
-                    "id": int(getattr(g, "id")),
-                    "vivienda_id": int(getattr(g, "vivienda_id")),
-                    "mes": int(getattr(g, "mes")),
-                    "ano": int(getattr(g, "ano")),
-                    "monto_total": monto_total,
-                    "estado": str(getattr(g, "estado", "")),
-                    "vencimiento": venci.isoformat() if venci is not None else None,
-                }
-            )
+        gastos = db.query(GastoComun).filter(GastoComun.vivienda_id.in_(viv_ids)).all()
+        gastos_payload = [
+            {
+                "id": int(gasto.id),
+                "vivienda_id": int(gasto.vivienda_id),
+                "mes": int(gasto.mes),
+                "ano": int(gasto.ano),
+                "monto_total": _to_float(gasto.monto_total),
+                "estado": gasto.estado,
+                "vencimiento": gasto.vencimiento.isoformat() if gasto.vencimiento else None,
+            }
+            for gasto in gastos
+        ]
 
-        # Multas
-        multas: list[Any] = db.query(Multa).filter(Multa.vivienda_id.in_(viv_ids)).all()
-        multas_payload = []
-        for m in multas:
-            monto_val = getattr(m, "monto", 0)
-            monto = float(monto_val) if monto_val is not None else 0.0
-            fecha_aplicada = getattr(m, "fecha_aplicada", None)
-            fecha_aplicada_str = fecha_aplicada.isoformat() if fecha_aplicada is not None else None
-            multas_payload.append(
-                {
-                    "id": int(getattr(m, "id")),
-                    "vivienda_id": int(getattr(m, "vivienda_id")),
-                    "monto": monto,
-                    "descripcion": str(getattr(m, "descripcion", "")),
-                    "fecha_aplicada": fecha_aplicada_str,
-                }
-            )
+        multas = db.query(Multa).filter(Multa.vivienda_id.in_(viv_ids)).all()
+        multas_payload = [
+            {
+                "id": int(multa.id),
+                "vivienda_id": int(multa.vivienda_id),
+                "monto": _to_float(multa.monto),
+                "descripcion": multa.descripcion or "",
+                "fecha_aplicada": multa.fecha_aplicada.isoformat() if multa.fecha_aplicada else None,
+            }
+            for multa in multas
+        ]
 
-        # Reservas del usuario
-        reservas: list[Any] = db.query(Reserva).filter(Reserva.usuario_id == usuario_id).all()
-        reservas_payload = []
-        for r in reservas:
-            monto_val = getattr(r, "monto_pago", 0)
-            monto_pago = float(monto_val) if monto_val is not None else 0.0
-            
-            inicio = getattr(r, "fecha_hora_inicio", None)
-            fin = getattr(r, "fecha_hora_fin", None)
-            inicio_str = inicio.isoformat() if inicio is not None else None
-            fin_str = fin.isoformat() if fin is not None else None
-            
-            reservas_payload.append(
-                {
-                    "id": int(getattr(r, "id")),
-                    "monto_pago": monto_pago,
-                    "estado_pago": str(getattr(r, "estado_pago", "")),
-                    "inicio": inicio_str,
-                    "fin": fin_str,
-                }
-            )
+        reservas = db.query(Reserva).filter(Reserva.usuario_id == usuario_id).all()
+        reservas_payload = [
+            {
+                "id": int(reserva.id),
+                "monto_pago": _to_float(reserva.monto_pago),
+                "estado_pago": reserva.estado_pago,
+                "inicio": reserva.fecha_hora_inicio.isoformat() if reserva.fecha_hora_inicio else None,
+                "fin": reserva.fecha_hora_fin.isoformat() if reserva.fecha_hora_fin else None,
+            }
+            for reserva in reservas
+        ]
 
         response_data = {
             "viviendas": viv_ids,
@@ -105,10 +118,62 @@ async def desglose_residente(usuario_id: int, db: Session = Depends(get_db)):
             "multas": multas_payload,
             "reservas": reservas_payload,
         }
-        
-        logger.info(f"DEBUG Pagos: Desglose completado para usuario_id={usuario_id}")
+
+        logger.info("DEBUG Pagos: Desglose completado para usuario_id=%s", usuario_id)
         return response_data
-        
-    except Exception as e:
-        logger.error(f"ERROR Pagos: Exception en desglose_residente: {str(e)}", exc_info=True)
+
+    except Exception as exc:
+        logger.error("ERROR Pagos: Exception en desglose_residente: %s", exc, exc_info=True)
+        raise
+
+
+@router.get("/todos")
+async def listar_todos_pagos(
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(get_current_active_user),
+):
+    """
+    Obtiene todos los pagos registrados en el condominio.
+    Solo accesible para administradores y conserjes.
+    """
+    if current_user.rol not in {"Administrador", "Conserje", "Super Admin"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tienes permisos para listar todos los pagos",
+        )
+
+    try:
+        pagos = db.query(Pago).order_by(Pago.fecha_pago.desc()).all()
+        resultado = []
+
+        for pago in pagos:
+            usuario = db.query(Usuario).filter(Usuario.id == pago.usuario_id).first()
+            gasto = db.query(GastoComun).filter(GastoComun.id == pago.gasto_comun_id).first()
+            vivienda = None
+            if gasto:
+                vivienda = db.query(Vivienda).filter(Vivienda.id == gasto.vivienda_id).first()
+
+            resultado.append(
+                {
+                    "id": pago.id,
+                    "usuario_id": pago.usuario_id,
+                    "usuario_nombre": usuario.nombre_completo if usuario else "Desconocido",
+                    "vivienda": vivienda.numero_vivienda if vivienda else "N/A",
+                    "monto_pagado": _to_float(pago.monto_pagado),
+                    "fecha_pago": pago.fecha_pago.isoformat() if pago.fecha_pago else None,
+                    "metodo_pago": pago.metodo_pago or "webpay",
+                    "gasto_mes": gasto.mes if gasto else None,
+                    "gasto_ano": gasto.ano if gasto else None,
+                    "gasto_estado": gasto.estado if gasto else None,
+                }
+            )
+
+        return {
+            "pagos": resultado,
+            "total": len(resultado),
+            "total_monto": sum(item["monto_pagado"] for item in resultado),
+        }
+
+    except Exception as exc:
+        logger.error("ERROR Pagos: Exception en listar_todos_pagos: %s", exc, exc_info=True)
         raise

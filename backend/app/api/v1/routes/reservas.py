@@ -9,6 +9,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+from app.core.auth import get_current_active_user
 from app.db.deps import get_db
 from app.schemas.reservas import (
     ReservaCreate, 
@@ -69,7 +70,10 @@ def _generar_slots_prueba(fecha_inicio, fecha_fin, duracion_minutos=60):
     summary="Listar todos los espacios comunes disponibles",
     tags=["Espacios"]
 )
-async def listar_espacios(db: Session = Depends(get_db)):
+async def listar_espacios(
+    db: Session = Depends(get_db),
+    _current_user: Usuario = Depends(get_current_active_user),
+):
     """
     Obtiene la lista de todos los espacios comunes disponibles.
     
@@ -125,7 +129,8 @@ async def obtener_disponibilidad(
     fecha_inicio: Optional[str] = None,
     fecha_fin: Optional[str] = None,
     duracion_minutos: int = 60,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(get_current_active_user),
 ):
     """
     Obtiene los slots disponibles para un espacio en un rango de fechas.
@@ -305,16 +310,16 @@ async def obtener_disponibilidad(
 )
 async def crear_reserva(
     reserva_data: ReservaCreate,
-    usuario_id: int,  # En producción, esto vendría del token JWT
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(get_current_active_user),
 ):
     """
     Crea una nueva reserva para un espacio común.
     
     Args:
         reserva_data: Datos de la reserva (espacio, fecha/hora)
-        usuario_id: ID del usuario que reserva
         db: Sesión de base de datos
+        current_user: Usuario autenticado (se usa su ID para la reserva)
     
     Returns:
         Datos de la reserva creada
@@ -331,6 +336,7 @@ async def crear_reserva(
         )
     
     # Validar que el usuario exista
+    usuario_id = current_user.id
     usuario = db.query(Usuario).filter(Usuario.id == usuario_id).first()
     if not usuario:
         raise HTTPException(
@@ -438,18 +444,30 @@ async def crear_reserva(
     summary="Listar reservas del usuario",
     tags=["Reservas"]
 )
-async def listar_reservas(usuario_id: int, db: Session = Depends(get_db)):
+async def listar_reservas(
+    usuario_id: int,
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(get_current_active_user),
+):
     """
     Obtiene todas las reservas de un usuario.
     
     Args:
         usuario_id: ID del usuario
         db: Sesión de base de datos
+        current_user: Usuario autenticado
     
     Returns:
         Lista de reservas del usuario
     """
     try:
+        # Verificar permisos: solo puede ver sus propias reservas o ser admin/conserje
+        if current_user.id != usuario_id and current_user.rol not in {"Administrador", "Conserje", "Super Admin"}:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permisos para ver las reservas de este usuario"
+            )
+        
         # Verificar que el usuario exista
         usuario = db.query(Usuario).filter(Usuario.id == usuario_id).first()
         if not usuario:
@@ -476,7 +494,8 @@ async def listar_reservas(usuario_id: int, db: Session = Depends(get_db)):
                     fecha_hora_inicio=reserva.fecha_hora_inicio,
                     fecha_hora_fin=reserva.fecha_hora_fin,
                     estado_pago=reserva.estado_pago,
-                    monto_pago=float(reserva.monto_pago)
+                    monto_pago=float(reserva.monto_pago),
+                    usuario_nombre=None
                 )
             )
         
@@ -484,6 +503,65 @@ async def listar_reservas(usuario_id: int, db: Session = Depends(get_db)):
     
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error al listar reservas: {str(e)}"
+        )
+
+@router.get(
+    "/todas",
+    response_model=List[ReservaListResponse],
+    summary="Listar todas las reservas",
+    tags=["Reservas"]
+)
+async def listar_todas_reservas(
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(get_current_active_user),
+):
+    """
+    Obtiene todas las reservas del condominio.
+    Solo accesible para administradores y conserjes.
+    
+    Args:
+        db: Sesión de base de datos
+        current_user: Usuario autenticado
+    
+    Returns:
+        Lista de todas las reservas
+    """
+    if current_user.rol not in {"Administrador", "Conserje", "Super Admin"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tienes permisos para ver todas las reservas"
+        )
+    
+    try:
+
+        reservas = db.query(Reserva).order_by(Reserva.fecha_hora_inicio.desc()).all()
+        
+        resultado = []
+        for reserva in reservas:
+            espacio_db = db.query(EspacioComun).filter(
+                EspacioComun.id == reserva.espacio_comun_id
+            ).first()
+            
+            # Obtener información del usuario
+            usuario_db = db.query(Usuario).filter(Usuario.id == reserva.usuario_id).first()
+            
+            reserva_response = ReservaListResponse(
+                id=reserva.id,
+                espacio=espacio_db.nombre if espacio_db else "Desconocido",
+                fecha_hora_inicio=reserva.fecha_hora_inicio,
+                fecha_hora_fin=reserva.fecha_hora_fin,
+                estado_pago=reserva.estado_pago,
+                monto_pago=float(reserva.monto_pago),
+                usuario_nombre=usuario_db.nombre_completo if usuario_db else "Desconocido"
+            )
+            resultado.append(reserva_response)
+        
+        return resultado
+    
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -498,16 +576,16 @@ async def listar_reservas(usuario_id: int, db: Session = Depends(get_db)):
 )
 async def cancelar_reserva(
     reserva_id: int,
-    usuario_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(get_current_active_user),
 ):
     """
     Cancela una reserva existente.
     
     Args:
         reserva_id: ID de la reserva a cancelar
-        usuario_id: ID del usuario (para verificación)
         db: Sesión de base de datos
+        current_user: Usuario autenticado
     
     Returns:
         Mensaje de confirmación
@@ -523,7 +601,7 @@ async def cancelar_reserva(
             )
         
         # Verificar que el usuario sea el propietario de la reserva
-        if reserva.usuario_id != usuario_id:
+        if reserva.usuario_id != current_user.id and current_user.rol not in {"Administrador", "Conserje", "Super Admin"}:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="No tienes permiso para cancelar esta reserva"

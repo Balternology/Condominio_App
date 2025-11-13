@@ -1,0 +1,66 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    volumes:
+      - .:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+      - CHOKIDAR_USEPOLLING=true
+    stdin_open: true
+    tty: true
+    depends_on:
+      - api
+
+  db:
+    image: postgres:16-alpine
+    container_name: condominio_db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: condominio
+      POSTGRES_USER: condouser
+      POSTGRES_PASSWORD: condopass
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U condouser -d condominio"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./google-service-account-key.json:/app/google-service-account-key.json:ro
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: condouser
+      DB_PASSWORD: condopass
+      DB_NAME: condominio
+      GOOGLE_SERVICE_ACCOUNT_KEY_PATH: /app/google-service-account-key.json
+      GOOGLE_CALENDAR_ID_MULTICANCHA: ${GOOGLE_CALENDAR_ID_MULTICANCHA:-multicancha@group.calendar.google.com}
+      GOOGLE_CALENDAR_ID_QUINCHO: ${GOOGLE_CALENDAR_ID_QUINCHO:-quincho@group.calendar.google.com}
+      GOOGLE_CALENDAR_ID_SALA_EVENTOS: ${GOOGLE_CALENDAR_ID_SALA_EVENTOS:-sala_eventos@group.calendar.google.com}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pgdata:
