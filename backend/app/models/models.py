@@ -1,3 +1,21 @@
+"""
+Modelos de base de datos SQLAlchemy para el sistema de gestión de condominio.
+
+Este módulo define todas las tablas y relaciones de la base de datos usando SQLAlchemy ORM.
+Cada clase representa una tabla en la base de datos MySQL.
+
+Modelos principales:
+- Condominio: Información de condominios
+- Usuario: Usuarios del sistema (residentes, administradores, conserjes)
+- Vivienda: Viviendas (departamentos, casas) dentro de condominios
+- ResidenteVivienda: Relación muchos-a-muchos entre usuarios y viviendas
+- GastoComun: Gastos comunes mensuales por vivienda
+- Multa: Multas aplicadas a viviendas
+- EspacioComun: Espacios comunes disponibles para reserva
+- Reserva: Reservas de espacios comunes
+- Pago: Pagos realizados por gastos comunes
+- Anuncio: Anuncios y comunicados del condominio
+"""
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -15,37 +33,55 @@ from sqlalchemy import (
 from sqlalchemy.orm import declarative_base, relationship
 from sqlalchemy.sql import func
 
+# Base declarativa de SQLAlchemy - todas las clases de modelos heredan de esta
 Base = declarative_base()
 
 
 class Condominio(Base):
+    """
+    Modelo que representa un condominio en el sistema.
+    
+    Un condominio puede tener múltiples viviendas, espacios comunes y anuncios.
+    """
     __tablename__ = "condominios"
     __table_args__ = (
-        UniqueConstraint("nombre", name="uq_condominios_nombre"),
+        UniqueConstraint("nombre", name="uq_condominios_nombre"),  # Nombre único
         {"mysql_charset": "utf8mb4", "mysql_engine": "InnoDB"},
     )
 
+    # Campos principales
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    nombre = Column(String(200), nullable=False)
-    direccion = Column(String(300), nullable=False)
+    nombre = Column(String(200), nullable=False)  # Nombre del condominio
+    direccion = Column(String(300), nullable=False)  # Dirección completa
+    
+    # Timestamps automáticos
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(
         DateTime(timezone=True),
         server_default=func.now(),
-        onupdate=func.now(),
+        onupdate=func.now(),  # Se actualiza automáticamente al modificar
         nullable=False,
     )
 
+    # Relaciones con otras tablas
+    # cascade="all,delete-orphan": Si se elimina el condominio, se eliminan sus viviendas/espacios/anuncios
     viviendas = relationship("Vivienda", back_populates="condominio", cascade="all,delete-orphan")
     espacios = relationship("EspacioComun", back_populates="condominio", cascade="all,delete-orphan")
     anuncios = relationship("Anuncio", back_populates="condominio", cascade="all,delete-orphan")
 
 
 class Vivienda(Base):
+    """
+    Modelo que representa una vivienda (departamento, casa) dentro de un condominio.
+    
+    Una vivienda pertenece a un condominio y puede tener múltiples residentes,
+    gastos comunes, multas, etc.
+    """
     __tablename__ = "viviendas"
     __table_args__ = (
+        # El número de vivienda debe ser único dentro de cada condominio
         UniqueConstraint("condominio_id", "numero_vivienda", name="uq_viviendas_condominio_numero"),
-        Index("idx_viviendas_condominio_id", "condominio_id"),
+        Index("idx_viviendas_condominio_id", "condominio_id"),  # Índice para búsquedas rápidas
         {"mysql_charset": "utf8mb4", "mysql_engine": "InnoDB"},
     )
 
@@ -53,9 +89,12 @@ class Vivienda(Base):
     condominio_id = Column(
         BigInteger,
         ForeignKey("condominios.id", onupdate="CASCADE", ondelete="RESTRICT"),
+        # ondelete="RESTRICT": No se puede eliminar un condominio si tiene viviendas
         nullable=False,
     )
-    numero_vivienda = Column(String(50), nullable=False)
+    numero_vivienda = Column(String(50), nullable=False)  # Ej: "Dpto 101", "Casa 5"
+    
+    # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(
         DateTime(timezone=True),
@@ -63,8 +102,11 @@ class Vivienda(Base):
         onupdate=func.now(),
         nullable=False,
     )
+    
+    # Cargo fijo mensual en UF (Unidad de Fomento)
     cargo_fijo_uf = Column(Numeric(10, 2), nullable=False, server_default="0")
 
+    # Relaciones
     condominio = relationship("Condominio", back_populates="viviendas")
     residentes = relationship("ResidenteVivienda", back_populates="vivienda", cascade="all,delete-orphan")
     gastos = relationship("GastoComun", back_populates="vivienda", cascade="all,delete-orphan")
@@ -72,22 +114,32 @@ class Vivienda(Base):
 
 
 class Usuario(Base):
+    """
+    Modelo que representa un usuario del sistema.
+    
+    Los usuarios pueden ser: Residente, Administrador, Conserje, Directiva, Super Admin.
+    Cada usuario tiene un email único y una contraseña hasheada (bcrypt).
+    """
     __tablename__ = "usuarios"
     __table_args__ = (
-        UniqueConstraint("email", name="uq_usuarios_email"),
-        Index("idx_usuarios_email", "email"),
+        UniqueConstraint("email", name="uq_usuarios_email"),  # Email único
+        Index("idx_usuarios_email", "email"),  # Índice para búsquedas rápidas (login)
         {"mysql_charset": "utf8mb4", "mysql_engine": "InnoDB"},
     )
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    email = Column(String(254), nullable=False, unique=True)
-    password_hash = Column(String(255), nullable=False)
+    email = Column(String(254), nullable=False, unique=True)  # RFC 5321 max length
+    password_hash = Column(String(255), nullable=False)  # Hash bcrypt de la contraseña
     nombre_completo = Column(String(200), nullable=False)
-    rol = Column(String(30), nullable=False, server_default="Residente")
-    is_active = Column(Boolean, nullable=False, server_default="true")
-    last_login = Column(DateTime(timezone=True))
+    rol = Column(String(30), nullable=False, server_default="Residente")  # Rol por defecto
+    is_active = Column(Boolean, nullable=False, server_default="true")  # Usuario activo/inactivo
+    last_login = Column(DateTime(timezone=True))  # Último inicio de sesión
+    
+    # Preferencias de notificaciones
     notificaciones_email = Column(Boolean, nullable=False, server_default="true")
     notificaciones_push = Column(Boolean, nullable=False, server_default="true")
+    
+    # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(
         DateTime(timezone=True),
@@ -96,6 +148,7 @@ class Usuario(Base):
         nullable=False,
     )
 
+    # Relaciones
     viviendas = relationship("ResidenteVivienda", back_populates="usuario", cascade="all,delete-orphan")
     reservas = relationship("Reserva", back_populates="usuario")
     pagos = relationship("Pago", back_populates="usuario")

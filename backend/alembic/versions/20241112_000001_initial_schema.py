@@ -1,7 +1,15 @@
-"""Initial schema for condominio system.
+"""
+Migración inicial del esquema de base de datos para el sistema de gestión de condominio.
+
+Este script crea todas las tablas necesarias para el funcionamiento del sistema:
+- Tablas principales: condominios, usuarios, viviendas, espacios_comunes
+- Tablas de relaciones: residentes_viviendas
+- Tablas de transacciones: gastos_comunes, pagos, multas, reservas, anuncios
+
+Además, inserta datos de prueba (seed data) para facilitar el desarrollo y testing.
 
 Revision ID: 20241112_000001
-Revises:
+Revises: None (migración inicial)
 Create Date: 2024-11-12 00:00:01
 """
 from datetime import datetime, timedelta
@@ -11,14 +19,23 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
-# revision identifiers, used by Alembic.
+# Identificadores de revisión usados por Alembic para control de versiones
 revision: str = "20241112_000001"
-down_revision: Union[str, None] = None
+down_revision: Union[str, None] = None  # No hay migración anterior (es la inicial)
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    """
+    Ejecuta la migración hacia adelante: crea todas las tablas y datos iniciales.
+    
+    Esta función se ejecuta cuando se aplica la migración con: alembic upgrade head
+    """
+    # ========================================================================
+    # TABLA: condominios
+    # Almacena la información de los condominios gestionados por el sistema
+    # ========================================================================
     op.create_table(
         "condominios",
         sa.Column("id", sa.BigInteger(), autoincrement=True, nullable=False),
@@ -43,6 +60,11 @@ def upgrade() -> None:
         mysql_charset="utf8mb4",
     )
 
+    # ========================================================================
+    # TABLA: usuarios
+    # Almacena la información de todos los usuarios del sistema (residentes, 
+    # administradores, conserjes, etc.)
+    # ========================================================================
     op.create_table(
         "usuarios",
         sa.Column("id", sa.BigInteger(), autoincrement=True, nullable=False),
@@ -72,8 +94,13 @@ def upgrade() -> None:
         mysql_engine="InnoDB",
         mysql_charset="utf8mb4",
     )
+    # Índice para búsquedas rápidas por email (usado en login)
     op.create_index("idx_usuarios_email", "usuarios", ["email"])
 
+    # ========================================================================
+    # TABLA: viviendas
+    # Almacena las viviendas (departamentos, casas) de cada condominio
+    # ========================================================================
     op.create_table(
         "viviendas",
         sa.Column("id", sa.BigInteger(), autoincrement=True, nullable=False),
@@ -114,8 +141,14 @@ def upgrade() -> None:
         mysql_engine="InnoDB",
         mysql_charset="utf8mb4",
     )
+    # Índice para búsquedas rápidas de viviendas por condominio
     op.create_index("idx_viviendas_condominio_id", "viviendas", ["condominio_id"])
 
+    # ========================================================================
+    # TABLA: residentes_viviendas
+    # Tabla de relación muchos-a-muchos entre usuarios y viviendas
+    # Permite que un usuario pueda ser residente de múltiples viviendas
+    # ========================================================================
     op.create_table(
         "residentes_viviendas",
         sa.Column("usuario_id", sa.BigInteger(), nullable=False),
@@ -138,9 +171,15 @@ def upgrade() -> None:
         mysql_engine="InnoDB",
         mysql_charset="utf8mb4",
     )
+    # Índices para búsquedas rápidas de relaciones usuario-vivienda
     op.create_index("idx_resviv_usuario_id", "residentes_viviendas", ["usuario_id"])
     op.create_index("idx_resviv_vivienda_id", "residentes_viviendas", ["vivienda_id"])
 
+    # ========================================================================
+    # TABLA: gastos_comunes
+    # Almacena los gastos comunes mensuales de cada vivienda
+    # Cada registro representa un mes de gastos para una vivienda específica
+    # ========================================================================
     op.create_table(
         "gastos_comunes",
         sa.Column("id", sa.BigInteger(), autoincrement=True, nullable=False),
@@ -178,8 +217,13 @@ def upgrade() -> None:
         mysql_engine="InnoDB",
         mysql_charset="utf8mb4",
     )
+    # Índice para búsquedas rápidas de gastos por vivienda
     op.create_index("idx_gastos_vivienda_id", "gastos_comunes", ["vivienda_id"])
 
+    # ========================================================================
+    # TABLA: multas
+    # Almacena las multas aplicadas a viviendas por incumplimientos
+    # ========================================================================
     op.create_table(
         "multas",
         sa.Column("id", sa.BigInteger(), autoincrement=True, nullable=False),
@@ -205,8 +249,14 @@ def upgrade() -> None:
         mysql_engine="InnoDB",
         mysql_charset="utf8mb4",
     )
+    # Índice para búsquedas rápidas de multas por vivienda
     op.create_index("idx_multas_vivienda_id", "multas", ["vivienda_id"])
 
+    # ========================================================================
+    # TABLA: espacios_comunes
+    # Almacena los espacios comunes disponibles para reserva (quincho, 
+    # multicancha, sala de eventos, etc.)
+    # ========================================================================
     op.create_table(
         "espacios_comunes",
         sa.Column("id", sa.BigInteger(), autoincrement=True, nullable=False),
@@ -231,8 +281,14 @@ def upgrade() -> None:
         mysql_engine="InnoDB",
         mysql_charset="utf8mb4",
     )
+    # Índice para búsquedas rápidas de espacios por condominio
     op.create_index("idx_espacios_condominio_id", "espacios_comunes", ["condominio_id"])
 
+    # ========================================================================
+    # TABLA: reservas
+    # Almacena las reservas de espacios comunes realizadas por los usuarios
+    # Incluye integración con Google Calendar (google_event_id)
+    # ========================================================================
     op.create_table(
         "reservas",
         sa.Column("id", sa.BigInteger(), autoincrement=True, nullable=False),
@@ -268,9 +324,14 @@ def upgrade() -> None:
         mysql_engine="InnoDB",
         mysql_charset="utf8mb4",
     )
+    # Índices para búsquedas rápidas de reservas por espacio y usuario
     op.create_index("idx_reservas_espacio_id", "reservas", ["espacio_comun_id"])
     op.create_index("idx_reservas_usuario_id", "reservas", ["usuario_id"])
 
+    # ========================================================================
+    # TABLA: pagos
+    # Almacena los pagos realizados por los usuarios para gastos comunes
+    # ========================================================================
     op.create_table(
         "pagos",
         sa.Column("id", sa.BigInteger(), autoincrement=True, nullable=False),
@@ -303,9 +364,14 @@ def upgrade() -> None:
         mysql_engine="InnoDB",
         mysql_charset="utf8mb4",
     )
+    # Índices para búsquedas rápidas de pagos por gasto y usuario
     op.create_index("idx_pagos_gasto_id", "pagos", ["gasto_comun_id"])
     op.create_index("idx_pagos_usuario_id", "pagos", ["usuario_id"])
 
+    # ========================================================================
+    # TABLA: anuncios
+    # Almacena los anuncios y comunicados del condominio
+    # ========================================================================
     op.create_table(
         "anuncios",
         sa.Column("id", sa.BigInteger(), autoincrement=True, nullable=False),
@@ -348,9 +414,13 @@ def upgrade() -> None:
         mysql_engine="InnoDB",
         mysql_charset="utf8mb4",
     )
+    # Índice para búsquedas rápidas de anuncios por condominio
     op.create_index("idx_anuncios_condominio_id", "anuncios", ["condominio_id"])
 
-    # Datos seed
+    # ========================================================================
+    # DATOS INICIALES (SEED DATA)
+    # Se insertan datos de prueba para facilitar el desarrollo y testing
+    # ========================================================================
     now = datetime.utcnow()
     condominio_id = 1
     vivienda_101_id = 1
@@ -409,6 +479,8 @@ def upgrade() -> None:
         ],
     )
 
+    # Hash de contraseña para usuarios de prueba (password: "password123")
+    # IMPORTANTE: En producción, usar contraseñas seguras y únicas
     password_hash = "$2b$12$QsXhxkm5xF0rnzO63VHanehDVzkPQgi4gfARKAvFpGfd3dgCwh2Ry"
     op.bulk_insert(
         sa.table(
@@ -575,6 +647,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """
+    Revierte la migración: elimina todas las tablas creadas.
+    
+    Esta función se ejecuta cuando se revierte la migración con: alembic downgrade -1
+    Las tablas se eliminan en orden inverso para respetar las dependencias de claves foráneas.
+    """
     op.drop_index("idx_anuncios_condominio_id", table_name="anuncios")
     op.drop_table("anuncios")
 

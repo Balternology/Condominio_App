@@ -1,5 +1,16 @@
 """
-Utilidades para interactuar con Google Calendar API usando Service Account
+Servicio para interactuar con Google Calendar API usando Service Account.
+
+Este módulo proporciona una clase GoogleCalendarManager que permite:
+- Obtener disponibilidad de espacios comunes desde Google Calendar
+- Crear eventos en Google Calendar cuando se hace una reserva
+- Eliminar eventos cuando se cancela una reserva
+- Calcular slots disponibles considerando eventos existentes
+
+La integración usa Service Account de Google, lo que permite acceso
+sin necesidad de autenticación de usuario final.
+
+IMPORTANTE: Requiere configuración previa de credenciales y calendarios.
 """
 from googleapiclient.discovery import build
 from google.oauth2 import service_account
@@ -9,20 +20,39 @@ import os
 from app.core.google_calendar import GOOGLE_SERVICE_ACCOUNT_KEY_PATH, GOOGLE_CALENDAR_IDS
 
 class GoogleCalendarManager:
-    """Manager para interactuar con Google Calendar API usando Service Account"""
+    """
+    Manager para interactuar con Google Calendar API usando Service Account.
+    
+    Esta clase encapsula todas las operaciones con Google Calendar:
+    - Autenticación con Service Account
+    - Consulta de eventos existentes
+    - Creación de nuevos eventos
+    - Eliminación de eventos
+    - Cálculo de disponibilidad
+    """
     
     def __init__(self):
+        """
+        Inicializa el manager de Google Calendar.
+        
+        Carga las credenciales de Service Account y crea el cliente de la API.
+        
+        Raises:
+            ValueError: Si el archivo de credenciales no existe
+        """
         # Validar que el archivo de Service Account exista
         if not os.path.exists(GOOGLE_SERVICE_ACCOUNT_KEY_PATH):
             raise ValueError(f"Service Account Key file not found at {GOOGLE_SERVICE_ACCOUNT_KEY_PATH}")
         
-        # Credenciales de Service Account
-        SCOPES = ['https://www.googleapis.com/auth/calendar']
+        # Configurar credenciales de Service Account
+        # Service Account permite acceso sin autenticación de usuario
+        SCOPES = ['https://www.googleapis.com/auth/calendar']  # Permisos necesarios
         credentials = service_account.Credentials.from_service_account_file(
             GOOGLE_SERVICE_ACCOUNT_KEY_PATH,
             scopes=SCOPES
         )
         
+        # Crear cliente de Google Calendar API v3
         self.service = build('calendar', 'v3', credentials=credentials)
         self.credentials = credentials
     
@@ -99,7 +129,19 @@ class GoogleCalendarManager:
         duracion_minutos: int
     ) -> List[Dict]:
         """
-        Calcula los slots disponibles considerando los eventos ocupados
+        Calcula los slots disponibles considerando los eventos ocupados.
+        
+        Genera slots de tiempo disponibles dentro del rango especificado,
+        excluyendo los horarios ocupados por eventos existentes.
+        
+        Args:
+            fecha_inicio: Fecha y hora de inicio del rango
+            fecha_fin: Fecha y hora de fin del rango
+            eventos_ocupados: Lista de eventos de Google Calendar que ocupan tiempo
+            duracion_minutos: Duración deseada de cada slot en minutos
+            
+        Returns:
+            Lista de diccionarios con slots disponibles (inicio, fin, disponible)
         """
         disponibilidad = []
         duracion = timedelta(minutes=duracion_minutos)
@@ -132,7 +174,20 @@ class GoogleCalendarManager:
     
     def _hay_conflicto(self, inicio: datetime, fin: datetime, eventos: List) -> bool:
         """
-        Verifica si hay conflicto entre el horario dado y los eventos existentes
+        Verifica si hay conflicto (solapamiento) entre un horario y eventos existentes.
+        
+        Dos horarios se solapan si:
+        - El inicio del slot está dentro del rango de un evento
+        - El fin del slot está dentro del rango de un evento
+        - El slot contiene completamente un evento
+        
+        Args:
+            inicio: Fecha y hora de inicio del slot a verificar
+            fin: Fecha y hora de fin del slot a verificar
+            eventos: Lista de eventos de Google Calendar
+            
+        Returns:
+            bool: True si hay conflicto, False si el slot está disponible
         """
         for evento in eventos:
             evento_inicio = datetime.fromisoformat(evento['start'].get('dateTime', evento['start'].get('date')))
@@ -203,7 +258,21 @@ class GoogleCalendarManager:
     
     def eliminar_evento(self, espacio: str, event_id: str) -> bool:
         """
-        Elimina un evento del calendario de Google
+        Elimina un evento del calendario de Google.
+        
+        Se usa cuando se cancela una reserva para mantener sincronización
+        entre la base de datos y Google Calendar.
+        
+        Args:
+            espacio: Tipo de espacio ('multicancha', 'quincho', 'sala_eventos')
+            event_id: ID del evento en Google Calendar (almacenado en reserva.google_event_id)
+            
+        Returns:
+            bool: True si se eliminó correctamente
+            
+        Raises:
+            ValueError: Si el espacio no es válido
+            Exception: Si hay error al eliminar el evento
         """
         calendar_id = GOOGLE_CALENDAR_IDS.get(espacio)
         if not calendar_id:

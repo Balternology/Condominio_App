@@ -1,3 +1,13 @@
+"""
+Rutas para gestión de gastos comunes.
+
+Este módulo proporciona endpoints para:
+- Listar gastos comunes de una vivienda específica
+- Listar gastos comunes de un usuario (todas sus viviendas)
+
+Los gastos comunes son los gastos mensuales que cada vivienda debe pagar
+(mantenimiento, servicios, etc.).
+"""
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
@@ -15,6 +25,25 @@ async def listar_gastos(
     db: Session = Depends(get_db),
     current_user: Usuario = Depends(get_current_active_user),
 ):
+    """
+    Obtiene todos los gastos comunes de una vivienda específica.
+    
+    Permisos:
+    - Administradores y conserjes pueden ver cualquier vivienda
+    - Residentes solo pueden ver gastos de sus propias viviendas
+    
+    Args:
+        vivienda_id: ID de la vivienda
+        db: Sesión de base de datos
+        current_user: Usuario autenticado
+        
+    Returns:
+        Lista de gastos comunes ordenados por año y mes (más recientes primero)
+        
+    Raises:
+        HTTPException 403: Si el usuario no tiene permisos
+        HTTPException 404: Si la vivienda no existe
+    """
     vivienda = db.query(Vivienda).filter(Vivienda.id == vivienda_id).first()
     if not vivienda:
         raise HTTPException(
@@ -66,8 +95,24 @@ async def listar_gastos_usuario(
 ):
     """
     Obtiene todos los gastos comunes de las viviendas del usuario.
-    Para administradores y conserjes, puede consultar cualquier usuario.
-    Para residentes, solo puede consultar sus propios gastos.
+    
+    Este endpoint agrupa los gastos de todas las viviendas del usuario.
+    Útil para residentes que tienen múltiples viviendas.
+    
+    Permisos:
+    - Administradores y conserjes pueden consultar cualquier usuario
+    - Residentes solo pueden consultar sus propios gastos
+    
+    Args:
+        usuario_id: ID del usuario
+        db: Sesión de base de datos
+        current_user: Usuario autenticado
+        
+    Returns:
+        Lista de gastos comunes con información de la vivienda asociada
+        
+    Raises:
+        HTTPException 403: Si el usuario no tiene permisos
     """
     try:
         # Verificar permisos

@@ -1,5 +1,14 @@
 """
-Modelos Pydantic para validación de datos en endpoints de reservas
+Modelos Pydantic para validación de datos en endpoints de reservas.
+
+Este módulo define los esquemas de validación y serialización para:
+- Crear nuevas reservas
+- Listar reservas existentes
+- Obtener disponibilidad de espacios
+- Respuestas de la API
+
+Los modelos Pydantic validan automáticamente los datos de entrada
+y proporcionan documentación automática en Swagger UI.
 """
 from pydantic import BaseModel, Field
 from datetime import datetime
